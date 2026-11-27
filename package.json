@@ -1,0 +1,9 @@
+{
+  "name": "healing-plants-admin",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "build": "node -e \"process.exit(0)\"" },
+  "dependencies": { "express": "4.21.2" },
+  "engines": { "node": ">=20" }
+}

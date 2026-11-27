@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Healing Plants · Admin</title>
+<style>
+:root{--bg:#0b0f0c;--card:#141b16;--line:#26332a;--text:#e8efe9;--mute:#8fa396;--accent:#4caf72;--danger:#e5534b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
+.wrap{max-width:1000px;margin:0 auto;padding:24px 16px}
+h1{font-size:22px;margin:0}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
+input,textarea{width:100%;background:#0e1410;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit}
+input:focus,textarea:focus{outline:2px solid var(--accent)}label{display:block;margin:12px 0 4px;color:var(--mute);font-size:13px}
+button{background:var(--accent);color:#06100a;border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}button.del{background:var(--danger);color:#fff}
+.login{max-width:380px;margin:12vh auto}.err{color:var(--danger);margin-top:10px;min-height:20px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{color:var(--mute);font-weight:500;font-size:13px}td img{width:44px;height:44px;object-fit:cover;border-radius:8px;display:block}
+.actions{display:flex;gap:8px;justify-content:flex-end}.hide{display:none}.mute{color:var(--mute)}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px 12px}
+.modal .card{width:100%;max-width:560px}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:600px){.row{grid-template-columns:1fr}.hc{display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="loginView" class="login card hide">
+    <h1>Admin login</h1><p class="mute">Healing Plants</p>
+    <label for="email">Email</label><input id="email" type="email" autocomplete="username">
+    <label for="password">Password</label><input id="password" type="password" autocomplete="current-password">
+    <p class="err" id="loginErr"></p>
+    <button id="loginBtn" style="width:100%">Log in</button>
+  </div>
+
+  <div id="appView" class="hide">
+    <div class="top">
+      <h1>Plants <span class="mute" id="count"></span></h1>
+      <div style="display:flex;gap:8px"><button id="addBtn">+ Add plant</button><button class="ghost" id="logoutBtn">Log out</button></div>
+    </div>
+    <div class="card" style="padding:8px 12px">
+      <input id="search" placeholder="Search plants…" style="margin:8px 0">
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th></th><th>Common name</th><th class="hc">Scientific name</th><th class="hc">Family</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+      <p class="mute" id="empty" style="padding:8px">No plants yet. Click “Add plant”.</p>
+    </div>
+  </div>
+</div>
+
+<div id="formModal" class="modal hide"><div class="card">
+  <h1 id="formTitle">Add plant</h1>
+  <label>Common name *</label><input id="f_common_name" maxlength="120">
+  <div class="row"><div><label>Scientific name</label><input id="f_scientific_name" maxlength="160"></div>
+  <div><label>Family</label><input id="f_family" maxlength="120"></div></div>
+  <div class="row"><div><label>Local name</label><input id="f_local_name" maxlength="160"></div>
+  <div><label>Conservation status</label><input id="f_conservation_status" maxlength="80"></div></div>
+  <label>Description</label><textarea id="f_description" rows="3" maxlength="3000"></textarea>
+  <label>Medicinal uses</label><textarea id="f_medicinal_uses" rows="3" maxlength="3000"></textarea>
+  <label>Photo (JPG, PNG or WebP, up to 5 MB)</label><input id="f_photo" type="file" accept="image/jpeg,image/png,image/webp">
+  <p class="err" id="formErr"></p>
+  <div class="actions"><button class="ghost" id="cancelBtn">Cancel</button><button id="saveBtn">Save</button></div>
+</div></div>
+
+<div id="delModal" class="modal hide"><div class="card" style="max-width:420px;margin-top:15vh">
+  <h1>Delete plant?</h1><p class="mute" id="delText"></p>
+  <div class="actions"><button class="ghost" id="delCancel">Cancel</button><button class="del" id="delConfirm">Delete</button></div>
+</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/pocketbase@0.26.2/dist/pocketbase.umd.js"></script>
+<script>
+const pb = new PocketBase(location.origin);
+const $ = id => document.getElementById(id);
+const FIELDS = ["common_name","scientific_name","family","local_name","conservation_status","description","medicinal_uses"];
+let plants = [], editing = null, deleting = null;
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const show = (id, on) => $(id).classList.toggle("hide", !on);
+const isAdmin = () => pb.authStore.isValid && pb.authStore.record?.collectionName === "admins";
+
+async function init() {
+  if (isAdmin()) {
+    try { await pb.collection("admins").authRefresh(); } catch { pb.authStore.clear(); }
+  }
+  render();
+}
+function render() {
+  show("loginView", !isAdmin()); show("appView", isAdmin());
+  if (isAdmin()) loadPlants();
+}
+async function loadPlants() {
+  try { plants = await pb.collection("plants").getFullList({ sort: "common_name", requestKey: null }); }
+  catch (e) { plants = []; alert("Could not load plants: " + e.message); }
+  drawRows();
+}
+function drawRows() {
+  const q = $("search").value.trim().toLowerCase();
+  const list = plants.filter(p => !q || [p.common_name,p.scientific_name,p.family,p.local_name].join(" ").toLowerCase().includes(q));
+  $("count").textContent = "(" + plants.length + ")";
+  $("empty").classList.toggle("hide", list.length > 0);
+  $("rows").innerHTML = list.map(p => `<tr>
+    <td>${p.photo ? `<img src="${esc(pb.files.getURL(p, p.photo, {thumb:"100x100"}))}" alt="">` : ""}</td>
+    <td><strong>${esc(p.common_name)}</strong><div class="mute">${esc(p.local_name)}</div></td>
+    <td class="hc"><em>${esc(p.scientific_name)}</em></td><td class="hc">${esc(p.family)}</td>
+    <td><div class="actions"><button class="ghost" data-edit="${p.id}">Edit</button><button class="del" data-del="${p.id}">Delete</button></div></td></tr>`).join("");
+}
+$("rows").addEventListener("click", e => {
+  const ed = e.target.closest("[data-edit]"), dl = e.target.closest("[data-del]");
+  if (ed) openForm(plants.find(p => p.id === ed.dataset.edit));
+  if (dl) { deleting = plants.find(p => p.id === dl.dataset.del); $("delText").textContent = "“" + deleting.common_name + "” will be permanently removed."; show("delModal", true); }
+});
+$("search").addEventListener("input", drawRows);
+
+function openForm(p) {
+  editing = p || null;
+  $("formTitle").textContent = p ? "Edit plant" : "Add plant";
+  FIELDS.forEach(f => $("f_" + f).value = p ? (p[f] ?? "") : "");
+  $("f_photo").value = ""; $("formErr").textContent = ""; show("formModal", true);
+  $("f_common_name").focus();
+}
+$("addBtn").onclick = () => openForm(null);
+$("cancelBtn").onclick = () => show("formModal", false);
+$("saveBtn").onclick = async () => {
+  const name = $("f_common_name").value.trim();
+  if (!name) { $("formErr").textContent = "Common name is required."; return; }
+  const fd = new FormData();
+  FIELDS.forEach(f => fd.append(f, $("f_" + f).value.trim()));
+  const file = $("f_photo").files[0];
+  if (file) fd.append("photo", file);
+  $("saveBtn").disabled = true;
+  try {
+    if (editing) await pb.collection("plants").update(editing.id, fd);
+    else await pb.collection("plants").create(fd);
+    show("formModal", false); await loadPlants();
+  } catch (e) { $("formErr").textContent = e.response?.message || e.message; }
+  $("saveBtn").disabled = false;
+};
+$("delCancel").onclick = () => show("delModal", false);
+$("delConfirm").onclick = async () => {
+  try { await pb.collection("plants").delete(deleting.id); show("delModal", false); await loadPlants(); }
+  catch (e) { alert("Could not delete: " + e.message); }
+};
+
+async function login() {
+  $("loginErr").textContent = "";
+  try { await pb.collection("admins").authWithPassword($("email").value.trim(), $("password").value); $("password").value = ""; render(); }
+  catch (e) { $("loginErr").textContent = e.status === 429 ? "Too many attempts. Wait a few minutes." : "Wrong email or password."; }
+}
+$("loginBtn").onclick = login;
+["email","password"].forEach(id => $(id).addEventListener("keydown", e => e.key === "Enter" && login()));
+$("logoutBtn").onclick = () => { pb.authStore.clear(); render(); };
+init();
+</script>
+</body>
+</html>
