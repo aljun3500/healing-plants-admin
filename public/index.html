@@ -10,9 +10,11 @@
 .wrap{max-width:1000px;margin:0 auto;padding:24px 16px}
 h1{font-size:22px;margin:0}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
-input,textarea{width:100%;background:#0e1410;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit}
-input:focus,textarea:focus{outline:2px solid var(--accent)}label{display:block;margin:12px 0 4px;color:var(--mute);font-size:13px}
+input,textarea,select{width:100%;background:#0e1410;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit}
+input:focus,textarea:focus,select:focus{outline:2px solid var(--accent)}label{display:block;margin:12px 0 4px;color:var(--mute);font-size:13px}
+input[type=checkbox]{width:auto;margin-right:8px}.chk{display:flex;align-items:center;margin-top:14px;color:var(--text)}
 button{background:var(--accent);color:#06100a;border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
 button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}button.del{background:var(--danger);color:#fff}
 .login{max-width:380px;margin:12vh auto}.err{color:var(--danger);margin-top:10px;min-height:20px}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
@@ -41,24 +43,27 @@ th{color:var(--mute);font-weight:500;font-size:13px}td img{width:44px;height:44p
     <div class="card" style="padding:8px 12px">
       <input id="search" placeholder="Search plants…" style="margin:8px 0">
       <div style="overflow-x:auto"><table>
-        <thead><tr><th></th><th>Common name</th><th class="hc">Scientific name</th><th class="hc">Family</th><th></th></tr></thead>
+        <thead><tr><th></th><th>Name</th><th class="hc">Family</th><th class="hc">Status</th><th></th></tr></thead>
         <tbody id="rows"></tbody>
       </table></div>
-      <p class="mute" id="empty" style="padding:8px">No plants yet. Click “Add plant”.</p>
+      <p class="mute" id="empty" style="padding:8px">No plants found.</p>
     </div>
   </div>
 </div>
 
 <div id="formModal" class="modal hide"><div class="card">
   <h1 id="formTitle">Add plant</h1>
-  <label>Common name *</label><input id="f_common_name" maxlength="120">
-  <div class="row"><div><label>Scientific name</label><input id="f_scientific_name" maxlength="160"></div>
-  <div><label>Family</label><input id="f_family" maxlength="120"></div></div>
-  <div class="row"><div><label>Local name</label><input id="f_local_name" maxlength="160"></div>
-  <div><label>Conservation status</label><input id="f_conservation_status" maxlength="80"></div></div>
-  <label>Description</label><textarea id="f_description" rows="3" maxlength="3000"></textarea>
-  <label>Medicinal uses</label><textarea id="f_medicinal_uses" rows="3" maxlength="3000"></textarea>
-  <label>Photo (JPG, PNG or WebP, up to 5 MB)</label><input id="f_photo" type="file" accept="image/jpeg,image/png,image/webp">
+  <label>Scientific name *</label><input id="f_scientific_name" maxlength="120">
+  <label>Common name</label><input id="f_common_name" maxlength="120">
+  <div class="row"><div><label>Family *</label><select id="f_family_id"></select></div>
+  <div><label>Conservation status *</label><select id="f_status_id"></select></div></div>
+  <div class="row"><label class="chk"><input id="f_toxic" type="checkbox">Toxic</label><label class="chk"><input id="f_endemic" type="checkbox">Endemic</label></div>
+  <label>Medicinal use</label><textarea id="f_medicinal_use" rows="3"></textarea>
+  <label>Description</label><textarea id="f_description" rows="3"></textarea>
+  <label>Photo (JPG, PNG or WebP)</label><input id="f_photo" type="file" accept="image/jpeg,image/png,image/webp">
+  <label>Or image URL</label><input id="f_image_url" maxlength="255">
+  <div class="row"><div><label>Image credit</label><input id="f_image_credit" maxlength="120"></div>
+  <div><label>Source</label><input id="f_source" maxlength="255"></div></div>
   <p class="err" id="formErr"></p>
   <div class="actions"><button class="ghost" id="cancelBtn">Cancel</button><button id="saveBtn">Save</button></div>
 </div></div>
@@ -68,88 +73,125 @@ th{color:var(--mute);font-weight:500;font-size:13px}td img{width:44px;height:44p
   <div class="actions"><button class="ghost" id="delCancel">Cancel</button><button class="del" id="delConfirm">Delete</button></div>
 </div></div>
 
-<script src="https://cdn.jsdelivr.net/npm/pocketbase@0.26.2/dist/pocketbase.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script>
-const pb = new PocketBase(location.origin);
+const SUPABASE_URL = "https://dzvrmqhbffclxfgtztok.supabase.co";
+const SUPABASE_KEY = "sb_publishable_j35ZG8u8ttJ-SoP4rFfPGw_FlzSVH8C";
+const BUCKET = "plant-images";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = id => document.getElementById(id);
-const FIELDS = ["common_name","scientific_name","family","local_name","conservation_status","description","medicinal_uses"];
-let plants = [], editing = null, deleting = null;
+const TEXT = ["scientific_name","common_name","medicinal_use","description","image_url","image_credit","source"];
+let plants = [], families = [], statuses = [], editing = null, deleting = null;
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const show = (id, on) => $(id).classList.toggle("hide", !on);
-const isAdmin = () => pb.authStore.isValid && pb.authStore.record?.collectionName === "admins";
+// Pick a readable label from a row of the family / conservation_status tables.
+const label = r => {
+  if (!r) return "";
+  for (const k of ["name","family_name","status_name","status","title","label","family"]) if (typeof r[k] === "string") return r[k];
+  const k = Object.keys(r).find(k => k !== "id" && typeof r[k] === "string");
+  return k ? r[k] : "#" + r.id;
+};
 
 async function init() {
-  if (isAdmin()) {
-    try { await pb.collection("admins").authRefresh(); } catch { pb.authStore.clear(); }
-  }
-  render();
+  const { data } = await sb.auth.getSession();
+  render(!!data.session);
+  sb.auth.onAuthStateChange((_e, s) => render(!!s));
 }
-function render() {
-  show("loginView", !isAdmin()); show("appView", isAdmin());
-  if (isAdmin()) loadPlants();
+function render(loggedIn) {
+  show("loginView", !loggedIn); show("appView", loggedIn);
+  if (loggedIn) loadAll();
 }
-async function loadPlants() {
-  try { plants = await pb.collection("plants").getFullList({ sort: "common_name", requestKey: null }); }
-  catch (e) { plants = []; alert("Could not load plants: " + e.message); }
+async function loadAll() {
+  const [p, f, s] = await Promise.all([
+    sb.from("species").select("*").order("scientific_name"),
+    sb.from("family").select("*").order("id"),
+    sb.from("conservation_status").select("*").order("id")
+  ]);
+  if (p.error) alert("Could not load plants: " + p.error.message);
+  plants = p.data || []; families = f.data || []; statuses = s.data || [];
   drawRows();
 }
+const famName = id => label(families.find(x => x.id === id));
+const statName = id => label(statuses.find(x => x.id === id));
 function drawRows() {
   const q = $("search").value.trim().toLowerCase();
-  const list = plants.filter(p => !q || [p.common_name,p.scientific_name,p.family,p.local_name].join(" ").toLowerCase().includes(q));
+  const list = plants.filter(p => !q || [p.scientific_name, p.common_name, famName(p.family_id)].join(" ").toLowerCase().includes(q));
   $("count").textContent = "(" + plants.length + ")";
   $("empty").classList.toggle("hide", list.length > 0);
   $("rows").innerHTML = list.map(p => `<tr>
-    <td>${p.photo ? `<img src="${esc(pb.files.getURL(p, p.photo, {thumb:"100x100"}))}" alt="">` : ""}</td>
-    <td><strong>${esc(p.common_name)}</strong><div class="mute">${esc(p.local_name)}</div></td>
-    <td class="hc"><em>${esc(p.scientific_name)}</em></td><td class="hc">${esc(p.family)}</td>
+    <td>${p.image_url ? `<img src="${esc(p.image_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ""}</td>
+    <td><strong>${esc(p.common_name || p.scientific_name)}</strong><div class="mute"><em>${esc(p.scientific_name)}</em></div></td>
+    <td class="hc">${esc(famName(p.family_id))}</td><td class="hc">${esc(statName(p.status_id))}</td>
     <td><div class="actions"><button class="ghost" data-edit="${p.id}">Edit</button><button class="del" data-del="${p.id}">Delete</button></div></td></tr>`).join("");
 }
 $("rows").addEventListener("click", e => {
   const ed = e.target.closest("[data-edit]"), dl = e.target.closest("[data-del]");
-  if (ed) openForm(plants.find(p => p.id === ed.dataset.edit));
-  if (dl) { deleting = plants.find(p => p.id === dl.dataset.del); $("delText").textContent = "“" + deleting.common_name + "” will be permanently removed."; show("delModal", true); }
+  if (ed) openForm(plants.find(p => String(p.id) === ed.dataset.edit));
+  if (dl) { deleting = plants.find(p => String(p.id) === dl.dataset.del); $("delText").textContent = "“" + (deleting.common_name || deleting.scientific_name) + "” will be permanently removed."; show("delModal", true); }
 });
 $("search").addEventListener("input", drawRows);
 
+function fillSelect(id, rows, value) {
+  $(id).innerHTML = rows.map(r => `<option value="${esc(r.id)}">${esc(label(r))}</option>`).join("");
+  if (value != null) $(id).value = String(value);
+}
 function openForm(p) {
   editing = p || null;
   $("formTitle").textContent = p ? "Edit plant" : "Add plant";
-  FIELDS.forEach(f => $("f_" + f).value = p ? (p[f] ?? "") : "");
+  TEXT.forEach(f => $("f_" + f).value = p ? (p[f] ?? "") : "");
+  if (!p) $("f_image_credit").value = "Dr. JC Kurian and Roshan Raphael";
+  fillSelect("f_family_id", families, p?.family_id);
+  fillSelect("f_status_id", statuses, p ? p.status_id : 1);
+  $("f_toxic").checked = !!p?.toxic; $("f_endemic").checked = !!p?.endemic;
   $("f_photo").value = ""; $("formErr").textContent = ""; show("formModal", true);
-  $("f_common_name").focus();
+  $("f_scientific_name").focus();
 }
 $("addBtn").onclick = () => openForm(null);
 $("cancelBtn").onclick = () => show("formModal", false);
 $("saveBtn").onclick = async () => {
-  const name = $("f_common_name").value.trim();
-  if (!name) { $("formErr").textContent = "Common name is required."; return; }
-  const fd = new FormData();
-  FIELDS.forEach(f => fd.append(f, $("f_" + f).value.trim()));
-  const file = $("f_photo").files[0];
-  if (file) fd.append("photo", file);
-  $("saveBtn").disabled = true;
+  const rec = {};
+  TEXT.forEach(f => { const v = $("f_" + f).value.trim(); rec[f] = v === "" ? null : v; });
+  if (!rec.scientific_name) { $("formErr").textContent = "Scientific name is required."; return; }
+  rec.family_id = Number($("f_family_id").value); rec.status_id = Number($("f_status_id").value);
+  if (!rec.family_id || !rec.status_id) { $("formErr").textContent = "Choose a family and a conservation status."; return; }
+  rec.toxic = $("f_toxic").checked; rec.endemic = $("f_endemic").checked;
+  $("saveBtn").disabled = true; $("formErr").textContent = "";
   try {
-    if (editing) await pb.collection("plants").update(editing.id, fd);
-    else await pb.collection("plants").create(fd);
-    show("formModal", false); await loadPlants();
-  } catch (e) { $("formErr").textContent = e.response?.message || e.message; }
+    const file = $("f_photo").files[0];
+    if (file) {
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const path = Date.now() + "-" + Math.random().toString(36).slice(2, 8) + "." + ext;
+      const up = await sb.storage.from(BUCKET).upload(path, file, { contentType: file.type });
+      if (up.error) throw up.error;
+      rec.image_url = sb.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+    }
+    const res = editing ? await sb.from("species").update(rec).eq("id", editing.id).select()
+                        : await sb.from("species").insert(rec).select();
+    if (res.error) throw res.error;
+    if (!res.data || !res.data.length) throw new Error("Not saved. Your account may not be allowed to change plants.");
+    show("formModal", false); await loadAll();
+  } catch (e) { $("formErr").textContent = e.message; }
   $("saveBtn").disabled = false;
 };
 $("delCancel").onclick = () => show("delModal", false);
 $("delConfirm").onclick = async () => {
-  try { await pb.collection("plants").delete(deleting.id); show("delModal", false); await loadPlants(); }
-  catch (e) { alert("Could not delete: " + e.message); }
+  const res = await sb.from("species").delete().eq("id", deleting.id).select();
+  if (res.error) { alert("Could not delete: " + res.error.message); return; }
+  if (!res.data || !res.data.length) { alert("Not deleted. Your account may not be allowed to change plants."); return; }
+  show("delModal", false); await loadAll();
 };
 
 async function login() {
-  $("loginErr").textContent = "";
-  try { await pb.collection("admins").authWithPassword($("email").value.trim(), $("password").value); $("password").value = ""; render(); }
-  catch (e) { $("loginErr").textContent = e.status === 429 ? "Too many attempts. Wait a few minutes." : "Wrong email or password."; }
+  $("loginErr").textContent = ""; $("loginBtn").disabled = true;
+  const { error } = await sb.auth.signInWithPassword({ email: $("email").value.trim(), password: $("password").value });
+  $("loginBtn").disabled = false;
+  if (error) $("loginErr").textContent = "Wrong email or password.";
+  else $("password").value = "";
 }
 $("loginBtn").onclick = login;
 ["email","password"].forEach(id => $(id).addEventListener("keydown", e => e.key === "Enter" && login()));
-$("logoutBtn").onclick = () => { pb.authStore.clear(); render(); };
+$("logoutBtn").onclick = () => sb.auth.signOut();
 init();
 </script>
 </body>
