@@ -171,7 +171,7 @@ $("saveBtn").onclick = async () => {
     if (res.error) throw res.error;
     if (!res.data || !res.data.length) throw new Error("Not saved. Your account may not be allowed to change plants.");
     show("formModal", false); await loadAll();
-  } catch (e) { $("formErr").textContent = e.message; }
+   } catch (e) { $("formErr").textContent = e.message; alert(e.message); }
   $("saveBtn").disabled = false;
 };
 $("delCancel").onclick = () => show("delModal", false);
